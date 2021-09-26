@@ -50,7 +50,8 @@ class AgentBase:
         # self.amp_scale = torch.cuda.amp.GradScaler()
         self.traj_list = [list() for _ in range(env_num)]
         self.device = torch.device(f"cuda:{agent_id}" if (torch.cuda.is_available() and (agent_id >= 0)) else "cpu")
-
+        print("cuda device", self.device)
+        assert 0
         self.cri = self.ClassCri(int(net_dim * 1.25), state_dim, action_dim).to(self.device)
         self.act = self.ClassAct(net_dim, state_dim, action_dim).to(self.device) if self.ClassAct else self.cri
         self.cri_target = deepcopy(self.cri) if self.if_use_cri_target else self.cri
