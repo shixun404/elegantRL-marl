@@ -16,6 +16,7 @@ env = mpe_make_env('simple_spread')
 '''init agent'''
 # agent = None   # means use random action
 agent = AgentDQN()  # means use the policy network which saved in cwd
+env = PreprocessEnv(env)
 agent_cwd = 'elegantRL-marl\AgentDQN_simple_spread_0'
 net_dim = 2 ** 8
 state_dim = env.state_dim
