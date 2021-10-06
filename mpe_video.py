@@ -17,7 +17,7 @@ env = mpe_make_env('simple_spread')
 # agent = None   # means use random action
 agent = AgentDQN()  # means use the policy network which saved in cwd
 env = PreprocessEnv(env)
-agent_cwd = 'elegantRL-marl\AgentDQN_simple_spread_0'
+agent_cwd = '~/elegantRL-marl/AgentDQN_simple_spread_0'
 net_dim = 2 ** 8
 state_dim = env.state_dim
 action_dim = env.action_dim
@@ -26,10 +26,10 @@ os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 agent.init(net_dim, state_dim, action_dim)
 agent.save_or_load_agent(cwd=agent_cwd, if_save=False)
 device = agent.device
-assert 0
+
 '''initialize evaluete and env.render()'''
-save_frame_dir = ''  # means don't save video, just open the env.render()
-# save_frame_dir = 'frames'  # means save video in this directory
+#save_frame_dir = '~/'  # means don't save video, just open the env.render()
+save_frame_dir = 'frames'  # means save video in this directory
 if save_frame_dir:
     os.makedirs(save_frame_dir, exist_ok=True)
 
@@ -43,17 +43,22 @@ for i in range(2 ** 10):
             action = env.action_space.sample()
         else:
             s_tensor = torch.as_tensor((state,), dtype=torch.float32, device=device)
-            a_tensor = agent.act(s_tensor)
-            action = a_tensor.detach().cpu().numpy()[0]  # if use 'with torch.no_grad()', then '.detach()' not need.
+            action_1 = agent.select_actions((state[0],))[0]
+            action_2 = agent.select_actions((state[1],))[0]
+            action_3 = agent.select_actions((state[2],))[0]
+            action = [action_1, action_2, action_3]  # if use 'with torch.no_grad()', then '.detach()' not need.
+        #print(action,action.shape)
+        print("*"*10)
+        print(state)
         next_state, reward, done, _ = env.step(action)
 
-        episode_return += reward
+        episode_return += reward[0]+reward[1]+reward[2]
         step += 1
 
         if done:
-            print(f'\t'
-                    f'TotalStep {i:>6}, epiStep {step:6.0f}, '
-                    f'Reward_T {reward:8.3f}, epiReward {episode_return:8.3f}')
+            #print(f'\t'
+            #        f'TotalStep {i:>6}, epiStep {step:6.0f}, '
+            #        f'Reward_T {reward:8.3f}, epiReward {episode_return:8.3f}')
             state = env.reset()
             episode_return = 0
             step = 0

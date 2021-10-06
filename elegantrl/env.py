@@ -40,6 +40,8 @@ class PreprocessEnv(gym.Wrapper):  # environment wrapper
         return [tmp[0].astype(np.float32), tmp[1].astype(np.float32),tmp[2].astype(np.float32)]
 
     def step_type(self, action):
+        #print(self.action_max)
+        #assert 0 
         state, reward, done, info = self.env.step(action * self.action_max)
         return state[0].astype(np.float32), reward, done, info
 
