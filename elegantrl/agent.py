@@ -236,7 +236,7 @@ class AgentDQN(AgentBase):
             traj_temp.append((state[0], (reward[0], done[0], action[0])))
             traj_temp.append((state[1], (reward[1], done[1], action[1])))
             traj_temp.append((state[2], (reward[2], done[2], action[2])))
-            state = env.reset() if done else next_s
+            state = env.reset() if done[0] and done[1] and done[2] else next_s
         self.states[0] = state
         traj_list = [traj_temp, ]
         return traj_list

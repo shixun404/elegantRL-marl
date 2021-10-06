@@ -43,7 +43,8 @@ class PreprocessEnv(gym.Wrapper):  # environment wrapper
         #print(self.action_max)
         #assert 0 
         state, reward, done, info = self.env.step(action * self.action_max)
-        return state[0].astype(np.float32), reward, done, info
+        #return state.astype(np.float32), reward, done, info
+        return state, reward, done, info
 
     def reset_norm(self) -> np.ndarray:
         """ convert the data type of state from float64 to float32
