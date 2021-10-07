@@ -8,7 +8,7 @@ import numpy.random as rd
 import multiprocessing as mp
 
 from elegantrl.env import build_env
-from elegantrl.replay import ReplayBuffer, ReplayBufferMP
+from elegantrl.replay import ReplayBuffer, ReplayBufferMP, ReplayBufferMARL
 from elegantrl.evaluator import Evaluator
 
 """[ElegantRL.2021.09.09](https://github.com/AI4Finance-LLC/ElegantRL)"""
@@ -137,28 +137,24 @@ def mpe_make_env(scenario_name, benchmark=False):
     return env
 
 def train_and_evaluate(args, agent_id=0):
-    print("*****************")
     args.init_before_training(if_main=True)
 
     env = build_env(args.env, if_print=False)
-    print("*****************")
     '''init: Agent'''
     agent = args.agent
-    agent.init(args.net_dim, env.state_dim, env.action_dim, args.learning_rate, args.if_per_or_gae, args.env_num)
-    agent.save_or_load_agent(args.cwd, if_save=False)
-    print("*****************")
+    agent.init(args.net_dim, env.state_dim, env.action_dim, args.learning_rate,args.marl, args.n_agents, args.if_per_or_gae, args.env_num)
+    #agent.save_or_load_agent(args.cwd, if_save=False)
     '''init Evaluator'''
     eval_env = build_env(env) if args.eval_env is None else args.eval_env
     evaluator = Evaluator(args.cwd, agent_id, agent.device, eval_env,
                           args.eval_gap, args.eval_times1, args.eval_times2)
     evaluator.save_or_load_recoder(if_save=False)
-    print("*****************")
     '''init ReplayBuffer'''
     if agent.if_on_policy:
         buffer = list()
     else:
-        buffer = ReplayBuffer(max_len=args.max_memo, state_dim=env.state_dim,
-                              action_dim=1 if env.if_discrete else env.action_dim,
+        buffer = ReplayBufferMARL(max_len=args.max_memo, state_dim=env.state_dim,
+                              action_dim= env.action_dim,n_agents = 3,
                               if_use_per=args.if_per_or_gae)
         buffer.save_or_load_history(args.cwd, if_save=False)
 
@@ -173,7 +169,7 @@ def train_and_evaluate(args, agent_id=0):
     if_allow_break = args.if_allow_break
     soft_update_tau = args.soft_update_tau
     del args
-    print("*****************")
+
     '''choose update_buffer()'''
     if agent.if_on_policy:
         assert isinstance(buffer, list)
@@ -192,34 +188,37 @@ def train_and_evaluate(args, agent_id=0):
             _r_exp = ten_reward.mean()
             return _steps, _r_exp
     else:
-        assert isinstance(buffer, ReplayBuffer)
+        assert isinstance(buffer, ReplayBufferMARL)
 
         def update_buffer(_trajectory_list):
             _steps = 0
             _r_exp = 0
             #print(_trajectory_list.shape)
             for _trajectory in _trajectory_list:
-                #print(_trajectory.shape)
                 ten_state = torch.as_tensor([item[0] for item in _trajectory], dtype=torch.float32)
-                ary_other = torch.as_tensor([item[1] for item in _trajectory])
+                
+                ten_reward = torch.as_tensor([item[1] for item in _trajectory])
 
-                ary_other[:, 0] = ary_other[:, 0] * reward_scale  # ten_reward
-                ary_other[:, 1] = (1.0 - ary_other[:, 1]) * gamma  # ten_mask = (1.0 - ary_done) * gamma
-                buffer.extend_buffer(ten_state, ary_other)
-
+                ten_done = torch.as_tensor([item[2] for item in _trajectory])
+                ten_action = torch.as_tensor([item[3] for item in _trajectory])
+                ten_reward = ten_reward * reward_scale  # ten_reward
+                ten_mask = (1.0 - ten_done *1) * gamma  # ten_mask = (1.0 - ary_done) * gamma
+                buffer.extend_buffer(ten_state, ten_reward, ten_mask, ten_action)
                 _steps += ten_state.shape[0]
-                _r_exp += ary_other[:, 0].mean()  # other = (reward, mask, action)
+                _r_exp += ten_reward.mean()  # other = (reward, mask, action)
             return _steps, _r_exp
 
     '''init ReplayBuffer after training start'''
-    agent.states = [env.reset(), ]
+    agent.states = env.reset()
     if not agent.if_on_policy:
         #if_load = buffer.save_or_load_history(cwd, if_save=False)
         if_load = 0
         if not if_load:
             trajectory = explore_before_training(env, target_step)
             trajectory = [trajectory, ]
+            
             steps, r_exp = update_buffer(trajectory)
+            
             evaluator.total_step += steps
 
     '''start training loop'''
@@ -227,11 +226,12 @@ def train_and_evaluate(args, agent_id=0):
     while if_train:
         with torch.no_grad():
             trajectory = agent.explore_env(env, target_step)
-            steps, r_exp = update_buffer(trajectory)
+            
+            steps, r_exp = update_buffer([trajectory,])
 
-        logging_tuple = agent.update_net(buffer, batch_size, repeat_times, soft_update_tau)
+        agent.update_net(buffer, batch_size, repeat_times, soft_update_tau)
         with torch.no_grad():
-            temp = evaluator.evaluate_and_save(agent.act, steps, r_exp, logging_tuple)
+            temp = evaluator.evaluate_and_save_marl(agent, steps, r_exp)
             if_reach_goal, if_save = temp
             if_train = not ((if_allow_break and if_reach_goal)
                             or evaluator.total_step > break_step
@@ -254,17 +254,15 @@ def explore_before_training(env, target_step):  # for off-policy only
     step = 0
     while True:
         if if_discrete:
-            action = [rd.randint(action_dim),rd.randint(action_dim),rd.randint(action_dim)]  # assert isinstance(action_int)
+            action = [rd.randn(action_dim),rd.randn(action_dim),rd.randn(action_dim)]  # assert isinstance(action_int)
             next_s, reward, done, _ = env.step(action)
             other = (reward, done, action)
         else:
             action = rd.uniform(-1, 1, size=action_dim)
             next_s, reward, done, _ = env.step(action)
             other = (reward, done, *action)
-        trajectory.append((state[0], (reward[0], done[0], action[0])))
-        trajectory.append((state[1], (reward[1],done[1], action[1])))
-        trajectory.append((state[2], (reward[2], done[2], action[2])))
-
+        trajectory.append((state, reward, done, action))
+        
         state = env.reset() if done else next_s
 
         step += 1

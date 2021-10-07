@@ -2,11 +2,12 @@ import os
 import torch
 import numpy as np
 import numpy.random as rd
+from elegantrl.replay import ReplayMemory, Experience
 
 from copy import deepcopy
 from elegantrl.net import QNet, QNetDuel, QNetTwin, QNetTwinDuel
-from elegantrl.net import Actor, ActorPPO, ActorSAC, ActorDiscretePPO
-from elegantrl.net import Critic, CriticAdv, CriticTwin
+from elegantrl.net import Actor, ActorPPO, ActorSAC, ActorDiscretePPO, ActorMARL
+from elegantrl.net import Critic, CriticAdv, CriticTwin, CriticMARL
 from elegantrl.net import SharedDPG, SharedSPG, SharedPPO
 
 """[ElegantRL.2021.09.09](https://github.com/AI4Finance-LLC/ElegantRL)"""
@@ -31,8 +32,8 @@ class AgentBase:
         self.cri = self.cri_target = self.if_use_cri_target = self.cri_optim = self.ClassCri = None
         self.act = self.act_target = self.if_use_act_target = self.act_optim = self.ClassAct = None
 
-    def init(self, net_dim, state_dim, action_dim, learning_rate=1e-4,
-             if_per_or_gae=False, env_num=1, agent_id=0):
+    def init(self, net_dim, state_dim, action_dim, learning_rate=1e-4,marl=False, n_agents = 1,
+             if_per_or_gae=False,  env_num=1, agent_id=0):
         """initialize the self.object in `__init__()`
 
         replace by different DRL algorithms
@@ -50,12 +51,13 @@ class AgentBase:
         # self.amp_scale = torch.cuda.amp.GradScaler()
         self.traj_list = [list() for _ in range(env_num)]
         self.device = torch.device(f"cuda:{agent_id}" if (torch.cuda.is_available() and (agent_id >= 0)) else "cpu")
-        print("agent_id", agent_id)
-        print("cuda is available", torch.cuda.is_available())
-        print("cuda device", self.device)
         #assert 0
-        self.cri = self.ClassCri(int(net_dim * 1.25), state_dim, action_dim).to(self.device)
+        if not marl:
+            self.cri = self.ClassCri(int(net_dim * 1.25), state_dim, action_dim).to(self.device)
+        else:
+            self.cri = self.ClassCri(int(net_dim * 1.25), state_dim * n_agents, action_dim * n_agents).to(self.device)
         self.act = self.ClassAct(net_dim, state_dim, action_dim).to(self.device) if self.ClassAct else self.cri
+        
         self.cri_target = deepcopy(self.cri) if self.if_use_cri_target else self.cri
         self.act_target = deepcopy(self.act) if self.if_use_act_target else self.act
 
@@ -270,6 +272,22 @@ class AgentDQN(AgentBase):
             self.optim_update(self.cri_optim, obj_critic)
             self.soft_update(self.cri_target, self.cri, soft_update_tau)
         return obj_critic.item(), q_value.mean().item()
+    def explore_one_env(self, env, target_step) -> list:
+        traj_temp = list()
+        state = self.states[0]
+        for _ in range(target_step):
+            action0 = self.select_actions((state[0],))[0]
+            action1 = self.select_actions((state[1],))[0]
+            action2 = self.select_actions((state[2],))[0]
+            action = [action0, action1, action2]  # assert isinstance(action, int)
+            next_s, reward, done, _ = env.step(action)
+            traj_temp.append((state[0], (reward[0], done[0], action[0])))
+            traj_temp.append((state[1], (reward[1], done[1], action[1])))
+            traj_temp.append((state[2], (reward[2], done[2], action[2])))
+            state = env.reset() if done[0] and done[1] and done[2] else next_s
+        self.states[0] = state
+        traj_list = [traj_temp, ]
+        return traj_list
 
     def get_obj_critic_raw(self, buffer, batch_size):
         with torch.no_grad():
@@ -349,10 +367,10 @@ class AgentDDPG(AgentBase):
         self.explore_noise = 0.3  # explore noise of action (OrnsteinUhlenbeckNoise)
         self.ou_noise = None
 
-    def init(self, net_dim, state_dim, action_dim, learning_rate=1e-4, if_use_per=False, env_num=1, agent_id=0):
-        super().init(net_dim, state_dim, action_dim, learning_rate, if_use_per, env_num, agent_id)
+    def init(self, net_dim, state_dim, action_dim, learning_rate=1e-4,marl=False, n_agents=1, if_use_per=False, env_num=1,  agent_id=0):
+        super().init(net_dim, state_dim, action_dim, learning_rate,marl, n_agents, if_use_per, env_num, agent_id)
         self.ou_noise = OrnsteinUhlenbeckNoise(size=action_dim, sigma=self.explore_noise)
-
+        self.loss_td = torch.nn.MSELoss()
         if if_use_per:
             self.criterion = torch.nn.SmoothL1Loss(reduction='none' if if_use_per else 'mean')
             self.get_obj_critic = self.get_obj_critic_per
@@ -363,10 +381,12 @@ class AgentDDPG(AgentBase):
     def select_actions(self, states) -> np.ndarray:
         states = torch.as_tensor(states, dtype=torch.float32, device=self.device)
         actions = self.act(states).detach().cpu().numpy()
+        
         if rd.rand() < self.explore_rate:  # epsilon-greedy
             ou_noise = self.ou_noise()
             actions = (actions + ou_noise[np.newaxis]).clip(-1, 1)
-        return actions
+        
+        return actions[0]
 
     def update_net(self, buffer, batch_size, repeat_times, soft_update_tau) -> (float, float):
         buffer.update_now_len()
@@ -405,6 +425,114 @@ class AgentDDPG(AgentBase):
         buffer.td_error_update(td_error)
         return obj_critic, state
 
+
+class AgentMADDPG(AgentBase):
+    def __init__(self):
+        super().__init__()
+        self.ClassAct = Actor
+        self.ClassCri = Critic
+        self.if_use_cri_target = True
+        self.if_use_act_target = True
+        
+    def init(self,net_dim, state_dim, action_dim, learning_rate=1e-4,marl=True, n_agents = 1,   if_use_per=False, env_num=1, agent_id=0):
+        self.agents = [AgentDDPG() for i in range(n_agents)]
+        self.explore_env = self.explore_one_env
+        self.if_on_policy = False
+        self.n_agents = n_agents
+        for i in range(self.n_agents):
+            self.agents[i].init(net_dim, state_dim, action_dim, learning_rate=1e-4,marl=True, n_agents = self.n_agents,   if_use_per=False, env_num=1, agent_id=0)
+        self.n_states = state_dim
+        self.n_actions = action_dim
+        
+        self.batch_size = net_dim
+        self.gamma = 0.95
+        self.update_tau = 0
+        self.device = torch.device(f"cuda:{agent_id}" if (torch.cuda.is_available() and (agent_id >= 0)) else "cpu")
+
+        
+    def update_agent(self, buffer, index):
+        rewards, dones, actions, observations, next_obs = buffer.sample_batch(self.batch_size)
+        curr_agent = self.agents[index]
+        curr_agent.cri_optim.zero_grad()
+        all_target_actions = []
+        for i in range(0, self.n_agents):
+            action = curr_agent.act(next_obs[:, i])
+            all_target_actions.append(action)
+        action_target_all = torch.cat(all_target_actions, dim = 1).to(self.device).reshape(actions.shape[0], actions.shape[1] *actions.shape[2])
+        
+        curr_agent.cri_target(next_obs.reshape(next_obs.shape[0], next_obs.shape[1] * next_obs.shape[2]), action_target_all)
+        target_value = rewards[:, index] + self.gamma * curr_agent.cri_target(next_obs.reshape(next_obs.shape[0], next_obs.shape[1] * next_obs.shape[2]), action_target_all).squeeze(dim = 1)
+        #vf_in = torch.cat((observations.reshape(next_obs.shape[0], next_obs.shape[1] * next_obs.shape[2]), actions.reshape(actions.shape[0], actions.shape[1],actions.shape[2])), dim = 2)
+        actual_value = curr_agent.cri(observations.reshape(next_obs.shape[0], next_obs.shape[1] * next_obs.shape[2]), actions.reshape(actions.shape[0], actions.shape[1]*actions.shape[2])).squeeze(dim = 1)
+        vf_loss = curr_agent.loss_td(actual_value, target_value.detach())
+        
+        
+        vf_loss.backward()
+        curr_agent.cri_optim.step()
+
+        curr_agent.act_optim.zero_grad()
+        curr_pol_out = curr_agent.act(observations[:, index])
+        curr_pol_vf_in = curr_pol_out
+        all_pol_acs = []
+        for i in range(0, self.n_agents):
+            if i == index:
+                all_pol_acs.append(curr_pol_vf_in)
+            else:
+                all_pol_acs.append(self.agents[i].act(observations[:, i]).detach())
+        #vf_in = torch.cat((observations, torch.cat(all_pol_acs, dim = 0).to(self.device).reshape(actions.size()[0], actions.size()[1], actions.size()[2])), dim = 2)
+
+        pol_loss = -torch.mean(curr_agent.cri(observations.reshape(observations.shape[0], observations.shape[1]*observations.shape[2]), torch.cat(all_pol_acs, dim = 1).to(self.device).reshape(actions.shape[0], actions.shape[1] *actions.shape[2])))
+        pol_loss.backward()
+        curr_agent.act_optim.step()            
+
+    def update_net(self, buffer, batch_size, repeat_times, soft_update_tau):
+        buffer.update_now_len()
+        self.batch_size = batch_size
+        self.update_tau = soft_update_tau
+        self.update(buffer)
+        self.update_all_agents()
+        return 
+
+    def update(self, buffer):
+        for index in range(self.n_agents):
+            self.update_agent(buffer, index)
+
+    def update_all_agents(self):
+        for agent in self.agents:
+            self.soft_update(agent.cri_target, agent.cri, self.update_tau)
+            self.soft_update(agent.act_target, agent.act, self.update_tau)
+    
+    def explore_one_env(self, env, target_step) -> list:
+        traj_temp = list()
+        for _ in range(target_step):
+            actions = []
+            for i in range(self.n_agents):
+                action = self.agents[i].select_actions(self.states[i])
+                actions.append(action)
+            next_s, reward, done, _ = env.step(actions)
+            traj_temp.append((self.states, reward, done, actions))
+            global_done = True
+            for i in range(self.n_agents):
+                if global_done is not True:
+                    global_done = False
+                    break
+            state = env.reset() if global_done else next_s
+        self.states = state
+        traj_list = traj_temp
+        return traj_list
+    
+    def select_actions(self, states):
+        actions = []
+        for i in range(self.n_agents):
+            action = self.agents[i].select_actions((states[i]))
+            actions.append(action)
+        return actions
+
+    def save_or_load_agent(self, cwd, if_save):
+        for i in range(self.n_agents):
+            self.agents[i].save_or_load_agent(cwd+'/'+str(i),if_save)
+
+    
 
 class AgentTD3(AgentBase):
     def __init__(self):
