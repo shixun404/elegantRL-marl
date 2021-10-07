@@ -455,12 +455,13 @@ class AgentMADDPG(AgentBase):
         curr_agent = self.agents[index]
         curr_agent.cri_optim.zero_grad()
         all_target_actions = []
+        all_target_actions.append(curr_agent.act_target(next_obs[:, index]))
         for i in range(0, self.n_agents):
-            action = curr_agent.act(next_obs[:, i])
-            all_target_actions.append(action)
+            if i != index:
+                action = self.agents[i].act_target(next_obs[:, i])
+                all_target_actions.append(action)
         action_target_all = torch.cat(all_target_actions, dim = 1).to(self.device).reshape(actions.shape[0], actions.shape[1] *actions.shape[2])
         
-        curr_agent.cri_target(next_obs.reshape(next_obs.shape[0], next_obs.shape[1] * next_obs.shape[2]), action_target_all)
         target_value = rewards[:, index] + self.gamma * curr_agent.cri_target(next_obs.reshape(next_obs.shape[0], next_obs.shape[1] * next_obs.shape[2]), action_target_all).squeeze(dim = 1)
         #vf_in = torch.cat((observations.reshape(next_obs.shape[0], next_obs.shape[1] * next_obs.shape[2]), actions.reshape(actions.shape[0], actions.shape[1],actions.shape[2])), dim = 2)
         actual_value = curr_agent.cri(observations.reshape(next_obs.shape[0], next_obs.shape[1] * next_obs.shape[2]), actions.reshape(actions.shape[0], actions.shape[1]*actions.shape[2])).squeeze(dim = 1)
@@ -478,7 +479,7 @@ class AgentMADDPG(AgentBase):
             if i == index:
                 all_pol_acs.append(curr_pol_vf_in)
             else:
-                all_pol_acs.append(self.agents[i].act(observations[:, i]).detach())
+                all_pol_acs.append(actions[:, i])
         #vf_in = torch.cat((observations, torch.cat(all_pol_acs, dim = 0).to(self.device).reshape(actions.size()[0], actions.size()[1], actions.size()[2])), dim = 2)
 
         pol_loss = -torch.mean(curr_agent.cri(observations.reshape(observations.shape[0], observations.shape[1]*observations.shape[2]), torch.cat(all_pol_acs, dim = 1).to(self.device).reshape(actions.shape[0], actions.shape[1] *actions.shape[2])))
@@ -504,7 +505,9 @@ class AgentMADDPG(AgentBase):
     
     def explore_one_env(self, env, target_step) -> list:
         traj_temp = list()
+        k = 0
         for _ in range(target_step):
+            k = k + 1
             actions = []
             for i in range(self.n_agents):
                 action = self.agents[i].select_actions(self.states[i])
@@ -516,7 +519,11 @@ class AgentMADDPG(AgentBase):
                 if global_done is not True:
                     global_done = False
                     break
-            state = env.reset() if global_done else next_s
+            if global_done or k >100:
+                state = env.reset() 
+                k = 0
+            else: 
+                state = next_s
         self.states = state
         traj_list = traj_temp
         return traj_list
@@ -531,6 +538,9 @@ class AgentMADDPG(AgentBase):
     def save_or_load_agent(self, cwd, if_save):
         for i in range(self.n_agents):
             self.agents[i].save_or_load_agent(cwd+'/'+str(i),if_save)
+    def load_actor(self, cwd):
+        for i in range(self.n_agents):
+            self.agents[i].act.load_state_dict(torch.load(cwd+'/actor'+str(i) + '.pth', map_location ='cpu'))
 
     
 

@@ -252,7 +252,9 @@ def explore_before_training(env, target_step):  # for off-policy only
     action_dim = env.action_dim
     state = env.reset()
     step = 0
+    k = 0
     while True:
+        k = k +1
         if if_discrete:
             action = [rd.randn(action_dim),rd.randn(action_dim),rd.randn(action_dim)]  # assert isinstance(action_int)
             next_s, reward, done, _ = env.step(action)
@@ -263,7 +265,11 @@ def explore_before_training(env, target_step):  # for off-policy only
             other = (reward, done, *action)
         trajectory.append((state, reward, done, action))
         
-        state = env.reset() if done else next_s
+        if k > 100:
+            state = env.reset()
+            k = 0
+        else:
+            state = next_s
 
         step += 1
         if done and step > target_step:

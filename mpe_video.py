@@ -7,7 +7,7 @@ import gym  # not necessary
 import numpy as np
 
 from elegantrl.run import *
-from elegantrl.agent import AgentDQN
+from elegantrl.agent import AgentDQN, AgentMADDPG
 from elegantrl.env import PreprocessEnv
 
 """init env"""
@@ -15,16 +15,17 @@ env = mpe_make_env('simple_spread')
 
 '''init agent'''
 # agent = None   # means use random action
-agent = AgentDQN()  # means use the policy network which saved in cwd
+#agent = AgentDQN()  # means use the policy network which saved in cwd
+agent = AgentMADDPG()
 env = PreprocessEnv(env)
-agent_cwd = '~/elegantRL-marl/AgentDQN_simple_spread_0'
+agent_cwd = '/home/xiaoogui/AgentMADDPG_simple_spread_0'
 net_dim = 2 ** 8
 state_dim = env.state_dim
 action_dim = env.action_dim
 os.environ['CUDA_VISIBLE_DEVICES'] = '1'
 
-agent.init(net_dim, state_dim, action_dim)
-agent.save_or_load_agent(cwd=agent_cwd, if_save=False)
+agent.init(net_dim, env.state_dim, env.action_dim, marl = True, n_agents = 3)
+agent.load_actor(cwd=agent_cwd)
 device = agent.device
 
 '''initialize evaluete and env.render()'''
@@ -45,10 +46,7 @@ for i in range(2 ** 10):
             action = env.action_space.sample()
         else:
             s_tensor = torch.as_tensor((state,), dtype=torch.float32, device=device)
-            action_1 = agent.select_actions((state[0],))[0]
-            action_2 = agent.select_actions((state[1],))[0]
-            action_3 = agent.select_actions((state[2],))[0]
-            action = [action_1, action_2, action_3]  # if use 'with torch.no_grad()', then '.detach()' not need.
+            action = agent.select_actions(state)  # if use 'with torch.no_grad()', then '.detach()' not need.
         #print(action,action.shape)
         print("*"*10)
         print(state)
