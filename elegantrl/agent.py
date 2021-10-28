@@ -450,26 +450,27 @@ class AgentMADDPG(AgentBase):
         self.device = torch.device(f"cuda:{agent_id}" if (torch.cuda.is_available() and (agent_id >= 0)) else "cpu")
 
         
-    def update_agent(self, buffer, index):
-        rewards, dones, actions, observations, next_obs = buffer.sample_batch(self.batch_size)
+    def update_agent(self, rewards, dones, actions, observations, next_obs, index):
+        #rewards, dones, actions, observations, next_obs = buffer.sample_batch(self.batch_size)
         curr_agent = self.agents[index]
         curr_agent.cri_optim.zero_grad()
         all_target_actions = []
-        all_target_actions.append(curr_agent.act_target(next_obs[:, index]))
-        for i in range(0, self.n_agents):
+        for i in range(self.n_agents):
+            if i == index:
+                all_target_actions.append(curr_agent.act_target(next_obs[:, index]))
             if i != index:
                 action = self.agents[i].act_target(next_obs[:, i])
                 all_target_actions.append(action)
         action_target_all = torch.cat(all_target_actions, dim = 1).to(self.device).reshape(actions.shape[0], actions.shape[1] *actions.shape[2])
         
-        target_value = rewards[:, index] + self.gamma * curr_agent.cri_target(next_obs.reshape(next_obs.shape[0], next_obs.shape[1] * next_obs.shape[2]), action_target_all).squeeze(dim = 1)
+        target_value = rewards[:, index] + self.gamma * curr_agent.cri_target(next_obs.reshape(next_obs.shape[0], next_obs.shape[1] * next_obs.shape[2]), action_target_all).detach().squeeze(dim = 1)
         #vf_in = torch.cat((observations.reshape(next_obs.shape[0], next_obs.shape[1] * next_obs.shape[2]), actions.reshape(actions.shape[0], actions.shape[1],actions.shape[2])), dim = 2)
         actual_value = curr_agent.cri(observations.reshape(next_obs.shape[0], next_obs.shape[1] * next_obs.shape[2]), actions.reshape(actions.shape[0], actions.shape[1]*actions.shape[2])).squeeze(dim = 1)
         vf_loss = curr_agent.loss_td(actual_value, target_value.detach())
         
         
-        vf_loss.backward()
-        curr_agent.cri_optim.step()
+        #vf_loss.backward()
+        #curr_agent.cri_optim.step()
 
         curr_agent.act_optim.zero_grad()
         curr_pol_out = curr_agent.act(observations[:, index])
@@ -483,8 +484,14 @@ class AgentMADDPG(AgentBase):
         #vf_in = torch.cat((observations, torch.cat(all_pol_acs, dim = 0).to(self.device).reshape(actions.size()[0], actions.size()[1], actions.size()[2])), dim = 2)
 
         pol_loss = -torch.mean(curr_agent.cri(observations.reshape(observations.shape[0], observations.shape[1]*observations.shape[2]), torch.cat(all_pol_acs, dim = 1).to(self.device).reshape(actions.shape[0], actions.shape[1] *actions.shape[2])))
+        
+        curr_agent.act_optim.zero_grad()
         pol_loss.backward()
-        curr_agent.act_optim.step()            
+        curr_agent.act_optim.step()     
+        curr_agent.cri_optim.zero_grad()
+        vf_loss.backward()
+        curr_agent.cri_optim.step()
+
 
     def update_net(self, buffer, batch_size, repeat_times, soft_update_tau):
         buffer.update_now_len()
@@ -495,8 +502,9 @@ class AgentMADDPG(AgentBase):
         return 
 
     def update(self, buffer):
+        rewards, dones, actions, observations, next_obs = buffer.sample_batch(self.batch_size)
         for index in range(self.n_agents):
-            self.update_agent(buffer, index)
+            self.update_agent(rewards, dones, actions, observations, next_obs, index)
 
     def update_all_agents(self):
         for agent in self.agents:
@@ -512,6 +520,7 @@ class AgentMADDPG(AgentBase):
             for i in range(self.n_agents):
                 action = self.agents[i].select_actions(self.states[i])
                 actions.append(action)
+            #print(actions)
             next_s, reward, done, _ = env.step(actions)
             traj_temp.append((self.states, reward, done, actions))
             global_done = True

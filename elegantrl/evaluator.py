@@ -91,8 +91,6 @@ class Evaluator:
             rewards_steps_list = [get_episode_return_and_step_marl(self.eval_env, agent, self.device) for _ in
                                   range(self.eval_times1)]
             r_avg, r_std, s_avg, s_std = self.get_r_avg_std_s_avg_std(rewards_steps_list)
-            print(r_avg)
-            assert 0
             '''evaluate second time'''
             if r_avg > self.r_max:  # evaluate actor twice to save CPU Usage and keep precision
                 rewards_steps_list += [get_episode_return_and_step_marl(self.eval_env, agent, self.device)
@@ -174,19 +172,15 @@ def get_episode_return_and_step_marl(env, agent, device) -> (float, int):
     if_discrete = env.if_discrete
 
     state = env.reset()
-    for episode_step in range(max_step):
+    for episode_step in range(100):
         action = agent.select_actions(state)
         
         state, reward, done, _ = env.step(action)
-        for i in range(agent.n_agents):
-            episode_return += reward[i] 
+        #for i in range(agent.n_agents):
+        episode_return += reward[0] 
         global_done = True
-        for i in range(agent.n_agents):
-            if done[i] == False:
-                global_done = False
-                break
-        if global_done:
-            break
+    
+
     episode_return = getattr(env, 'episode_return', episode_return)
     return episode_return, episode_step
 

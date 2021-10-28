@@ -10,7 +10,7 @@ import multiprocessing as mp
 from elegantrl.env import build_env
 from elegantrl.replay import ReplayBuffer, ReplayBufferMP, ReplayBufferMARL
 from elegantrl.evaluator import Evaluator
-
+from tqdm import tqdm
 """[ElegantRL.2021.09.09](https://github.com/AI4Finance-LLC/ElegantRL)"""
 
 
@@ -210,6 +210,7 @@ def train_and_evaluate(args, agent_id=0):
 
     '''init ReplayBuffer after training start'''
     agent.states = env.reset()
+    agent.if_on_policy = True
     if not agent.if_on_policy:
         #if_load = buffer.save_or_load_history(cwd, if_save=False)
         if_load = 0
@@ -223,19 +224,33 @@ def train_and_evaluate(args, agent_id=0):
 
     '''start training loop'''
     if_train = True
-    while if_train:
+    #cnt_train = 0
+    state = env.reset()
+    for cnt_train in tqdm(range(2000000)):
+        #    while if_train or cnt_train < 2000000:
+        if cnt_train % 100 ==0  and cnt_train > 0:
+            state = env.reset()
         with torch.no_grad():
-            trajectory = agent.explore_env(env, target_step)
-            
-            steps, r_exp = update_buffer([trajectory,])
+            traj_temp = list()
+            actions = []
+            for i in range(agent.n_agents):
+                 action = agent.agents[i].select_actions(state[i])
+                 actions.append(action)
 
-        agent.update_net(buffer, batch_size, repeat_times, soft_update_tau)
-        with torch.no_grad():
-            temp = evaluator.evaluate_and_save_marl(agent, steps, r_exp)
-            if_reach_goal, if_save = temp
-            if_train = not ((if_allow_break and if_reach_goal)
-                            or evaluator.total_step > break_step
-                            or os.path.exists(f'{cwd}/stop'))
+            next_s, reward, done, _ = env.step(actions)
+            traj_temp.append((state, reward, done, actions))
+            state = next_s
+            #trajectory = agent.explore_env(env, target_step)
+            steps, r_exp = update_buffer([traj_temp,])
+        if cnt_train > agent.batch_size:
+            agent.update_net(buffer, batch_size, repeat_times, soft_update_tau)
+        if cnt_train % 1000 == 0:
+            with torch.no_grad():
+                temp = evaluator.evaluate_and_save_marl(agent, steps, r_exp)
+                if_reach_goal, if_save = temp
+                if_train = not ((if_allow_break and if_reach_goal)
+                                or evaluator.total_step > break_step
+                                or os.path.exists(f'{cwd}/stop'))
 
     print(f'| UsedTime: {time.time() - evaluator.start_time:>7.0f} | SavedDir: {cwd}')
 
